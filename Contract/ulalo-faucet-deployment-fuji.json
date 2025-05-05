@@ -1,0 +1,9 @@
+{
+  "faucetAddress": "0x3ab6d658e1b77eE33C4138C4831d6e9Ab7eB8757",
+  "tokenAddress": "0xf936F99D28470A53a315873087c6Ea21bb246912",
+  "deploymentTime": "2025-05-05T15:11:46.297Z",
+  "faucetLimit": "1,000,000 ULALO",
+  "faucetBalance": "10000.0 ULALO",
+  "dripAmount": "1 ULALO per request",
+  "explorerLink": "https://testnet.snowtrace.io/address/0x3ab6d658e1b77eE33C4138C4831d6e9Ab7eB8757"
+}

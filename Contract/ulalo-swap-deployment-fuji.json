@@ -1,0 +1,10 @@
+{
+  "network": "fuji",
+  "ulaloToken": "0xf936F99D28470A53a315873087c6Ea21bb246912",
+  "ulaloSwap": "0xe6bFf5e6781C9BdF2bC058629cd4dD518067ca54",
+  "initialLiquidity": {
+    "avax": "1.0",
+    "ulalo": "10000.0"
+  },
+  "timestamp": "2025-04-28T15:43:03.446Z"
+}

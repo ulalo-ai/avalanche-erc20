@@ -1,0 +1,19 @@
+{
+  "network": {
+    "name": "unknown",
+    "chainId": "43113"
+  },
+  "token": {
+    "name": "Ulalo Token",
+    "symbol": "ULA",
+    "address": "0xD6c430e2d06574D130Cb59065cB27a1A67d63717",
+    "totalSupply": "100000000.0",
+    "decimals": 18,
+    "features": {
+      "transferLimitPercentage": "100% (no effective limit)",
+      "cooldown": "Removed"
+    }
+  },
+  "deployer": "0xA8F678cF2311e8575cd8b51E709e0B234896d75F",
+  "timestamp": "2025-04-30T10:36:28.781Z"
+}
