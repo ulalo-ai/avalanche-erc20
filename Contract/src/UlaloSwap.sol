@@ -5,37 +5,40 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./interface/IUlaloSwap.sol";
 
-contract UlaloSwap is ReentrancyGuard, Ownable, Pausable, IUlaloSwap {
-    address public constant override NATIVE_AVAX = address(0);
-    address public override token_Ulalo;
+contract UlaloSwap is ReentrancyGuard, Ownable, Pausable {
+    address public tokenWAVAX;  // Renamed to reflect wAVAX token
 
-    uint public override reserve_AVAX;
-    uint public override reserve_Ulalo;
+    uint public reserveULA;     // Renamed to reflect native ULA
+    uint public reserveWAVAX;   // Renamed to reflect wAVAX token
 
-    mapping(address => uint) public override liquidityBalances;
-    uint public override totalLiquidity;
+    mapping(address => uint) public liquidityBalances;
+    uint public totalLiquidity;
 
-    bool public override strictBalanceCheckEnabled = true;
+    bool public strictBalanceCheckEnabled = true;
 
+    event LiquidityAdded(address indexed provider, uint ulaAmount, uint wavaxAmount, uint liquidityMinted);
+    event LiquidityRemoved(address indexed provider, uint ulaAmount, uint wavaxAmount, uint liquidityBurned);
+    event Swapped(address indexed user, string tokenInType, uint amountIn, string tokenOutType, uint amountOut);
+    event ULATransferFailed(address indexed to, uint amount);
+    event StrictBalanceCheckUpdated(bool enabled);
 
-    constructor(address _token_Ulalo, address initialOwner) 
+    constructor(address _tokenWAVAX, address initialOwner) 
         Ownable(initialOwner) 
         Pausable() 
     {
-        token_Ulalo = _token_Ulalo;
+        tokenWAVAX = _tokenWAVAX;
     }
 
-    function addLiquidityWithAVAX(uint amount_Ulalo) external payable override nonReentrant whenNotPaused {
-        uint amount_AVAX = msg.value;
-        require(amount_AVAX > 0, "Must provide AVAX");
-        require(amount_Ulalo > 0, "Must provide Ulalo tokens");
+    function addLiquidityWithWAVAX(uint amountWAVAX) external payable nonReentrant whenNotPaused {
+        uint amountULA = msg.value;
+        require(amountULA > 0, "Must provide ULA");
+        require(amountWAVAX > 0, "Must provide wAVAX tokens");
 
         if (totalLiquidity > 0) {
             if (strictBalanceCheckEnabled) {
-                uint256 leftSide = reserve_AVAX * amount_Ulalo;
-                uint256 rightSide = reserve_Ulalo * amount_AVAX;
+                uint256 leftSide = reserveULA * amountWAVAX;
+                uint256 rightSide = reserveWAVAX * amountULA;
                 uint256 tolerance = leftSide / 1000;
 
                 require(
@@ -46,118 +49,117 @@ contract UlaloSwap is ReentrancyGuard, Ownable, Pausable, IUlaloSwap {
             }
         }
 
-        IERC20(token_Ulalo).transferFrom(msg.sender, address(this), amount_Ulalo);
+        IERC20(tokenWAVAX).transferFrom(msg.sender, address(this), amountWAVAX);
         
-        reserve_AVAX += amount_AVAX;
-        reserve_Ulalo += amount_Ulalo;
+        reserveULA += amountULA;
+        reserveWAVAX += amountWAVAX;
 
         uint liquidityMinted;
         if (totalLiquidity == 0) {
-            liquidityMinted = sqrt(amount_AVAX * amount_Ulalo);
+            liquidityMinted = sqrt(amountULA * amountWAVAX);
         } else {
             liquidityMinted = min(
-                (amount_AVAX * totalLiquidity) / (reserve_AVAX - amount_AVAX),
-                (amount_Ulalo * totalLiquidity) / (reserve_Ulalo - amount_Ulalo)
+                (amountULA * totalLiquidity) / (reserveULA - amountULA),
+                (amountWAVAX * totalLiquidity) / (reserveWAVAX - amountWAVAX)
             );
         }
 
         liquidityBalances[msg.sender] += liquidityMinted;
         totalLiquidity += liquidityMinted;
 
-        emit LiquidityAdded(msg.sender, amount_AVAX, amount_Ulalo, liquidityMinted);
+        emit LiquidityAdded(msg.sender, amountULA, amountWAVAX, liquidityMinted);
     }
 
-    function removeLiquidity(uint liquidityAmount) external override nonReentrant whenNotPaused returns (uint256 avaxAmount, uint256 ulaloAmount) {
+    function removeLiquidity(uint256 liquidityAmount) external nonReentrant whenNotPaused returns (uint256 ulaAmount, uint256 wavaxAmount) {
         require(liquidityBalances[msg.sender] >= liquidityAmount, "Insufficient liquidity");
 
-        uint amount_AVAX = (liquidityAmount * reserve_AVAX) / totalLiquidity;
-        uint amount_Ulalo = (liquidityAmount * reserve_Ulalo) / totalLiquidity;
+        uint amountULA = (liquidityAmount * reserveULA) / totalLiquidity;
+        uint amountWAVAX = (liquidityAmount * reserveWAVAX) / totalLiquidity;
 
         liquidityBalances[msg.sender] -= liquidityAmount;
         totalLiquidity -= liquidityAmount;
 
-        reserve_AVAX -= amount_AVAX;
-        reserve_Ulalo -= amount_Ulalo;
+        reserveULA -= amountULA;
+        reserveWAVAX -= amountWAVAX;
 
-        IERC20(token_Ulalo).transfer(msg.sender, amount_Ulalo);
+        IERC20(tokenWAVAX).transfer(msg.sender, amountWAVAX);
         
-        if (tx.origin != msg.sender) {
-            emit AVAXTransferFailed(msg.sender, amount_AVAX);
-        } else {
-            (bool success, ) = msg.sender.call{value: amount_AVAX}("");
-            require(success, "AVAX transfer failed");
+        // Transfer ULA - THIS IS THE PROBLEMATIC PART
+        (bool success, ) = msg.sender.call{value: amountULA}("");
+        if (!success) {
+            emit ULATransferFailed(msg.sender, amountULA);
         }
-
-        emit LiquidityRemoved(msg.sender, amount_AVAX, amount_Ulalo, liquidityAmount);
-        return (amount_AVAX, amount_Ulalo);
+        
+        emit LiquidityRemoved(msg.sender, amountULA, amountWAVAX, liquidityAmount);
+        return (amountULA, amountWAVAX);
     }
 
-    function sendAVAX(address to, uint256 amount) external override {
+    function sendAVAX(address to, uint256 amount) external nonReentrant whenNotPaused {
         require(msg.sender == address(this), "Only callable from this contract");
         (bool success, ) = to.call{value: amount}("");
         require(success, "AVAX transfer failed");
     }
 
-    function swapAVAXForUlalo(uint minAmountOut) external payable override nonReentrant whenNotPaused {
+    function swapULAForWAVAX(uint minAmountOut) external payable nonReentrant whenNotPaused {
         uint amountIn = msg.value;
-        require(amountIn > 0, "Must provide AVAX");
+        require(amountIn > 0, "Must provide ULA");
 
         uint amountInWithFee = amountIn * 997 / 1000;
-        uint amountOut = (reserve_Ulalo * amountInWithFee) / (reserve_AVAX + amountInWithFee);
+        uint amountOut = (reserveWAVAX * amountInWithFee) / (reserveULA + amountInWithFee);
 
         require(amountOut >= minAmountOut, "Slippage: amount out too low");
 
-        reserve_AVAX += amountIn;
-        reserve_Ulalo -= amountOut;
+        reserveULA += amountIn;
+        reserveWAVAX -= amountOut;
 
-        IERC20(token_Ulalo).transfer(msg.sender, amountOut);
+        IERC20(tokenWAVAX).transfer(msg.sender, amountOut);
 
-        emit Swapped(msg.sender, NATIVE_AVAX, amountIn, token_Ulalo, amountOut);
+        emit Swapped(msg.sender, "Native ULA", amountIn, "wAVAX", amountOut);
     }
 
-    function swapUlaloForAVAX(uint amountIn, uint minAmountOut) external override nonReentrant whenNotPaused {
+    function swapWAVAXForULA(uint amountIn, uint minAmountOut) external nonReentrant whenNotPaused {
         require(amountIn > 0, "Amount must be greater than 0");
 
-        IERC20(token_Ulalo).transferFrom(msg.sender, address(this), amountIn);
+        IERC20(tokenWAVAX).transferFrom(msg.sender, address(this), amountIn);
 
         uint amountInWithFee = amountIn * 997 / 1000;
-        uint amountOut = (reserve_AVAX * amountInWithFee) / (reserve_Ulalo + amountInWithFee);
+        uint amountOut = (reserveULA * amountInWithFee) / (reserveWAVAX + amountInWithFee);
 
         require(amountOut >= minAmountOut, "Slippage: amount out too low");
 
-        reserve_Ulalo += amountIn;
-        reserve_AVAX -= amountOut;
+        reserveWAVAX += amountIn;
+        reserveULA -= amountOut;
 
         (bool success, ) = msg.sender.call{value: amountOut}("");
-        require(success, "AVAX transfer failed");
+        require(success, "ULA transfer failed");
 
-        emit Swapped(msg.sender, token_Ulalo, amountIn, NATIVE_AVAX, amountOut);
+        emit Swapped(msg.sender, "wAVAX", amountIn, "Native ULA", amountOut);
     }
 
-    function getAVAXForUlalo(uint amountIn) external view override returns (uint) {
+    function getULAForWAVAX(uint amountIn) external view returns (uint) {
         uint amountInWithFee = amountIn * 997 / 1000;
-        return (reserve_AVAX * amountInWithFee) / (reserve_Ulalo + amountInWithFee);
+        return (reserveULA * amountInWithFee) / (reserveWAVAX + amountInWithFee);
     }
 
-    function getUlaloForAVAX(uint amountIn) external view override returns (uint) {
+    function getWAVAXForULA(uint amountIn) external view returns (uint) {
         uint amountInWithFee = amountIn * 997 / 1000;
-        return (reserve_Ulalo * amountInWithFee) / (reserve_AVAX + amountInWithFee);
+        return (reserveWAVAX * amountInWithFee) / (reserveULA + amountInWithFee);
     }
 
-    function pause() external override onlyOwner {
+    function pause() external onlyOwner {
         _pause();
     }
 
-    function unpause() external override onlyOwner {
+    function unpause() external onlyOwner {
         _unpause();
     }
 
-    function setStrictBalanceCheck(bool _enabled) external override onlyOwner {
+    function setStrictBalanceCheck(bool _enabled) external onlyOwner {
         strictBalanceCheckEnabled = _enabled;
         emit StrictBalanceCheckUpdated(_enabled);
     }
 
-    function sqrt(uint input) public pure override returns (uint result) {
+    function sqrt(uint input) public pure returns (uint result) {
         if (input > 3) {
             result = input;
             uint temp = input / 2 + 1;
@@ -174,11 +176,5 @@ contract UlaloSwap is ReentrancyGuard, Ownable, Pausable, IUlaloSwap {
         return a < b ? a : b;
     }
 
-    receive() external payable {
-        require(msg.sender == address(this), "Direct deposits not allowed");
-    }
-
-    fallback() external payable {
-        revert("Function not found");
-    }
+    receive() external payable {}
 }

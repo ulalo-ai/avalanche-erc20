@@ -90,4 +90,20 @@ contract MockERC20 {
         _balances[account] = accountBalance - amount;
         _totalSupply -= amount;
     }
+    
+    function burnFrom(address from, uint256 amount) public {
+        require(_allowances[from][msg.sender] >= amount, "Not enough allowance");
+        _allowances[from][msg.sender] -= amount;
+        _burn(from, amount);
+    }
+    
+    function _burn(address account, uint256 amount) internal {
+        require(account != address(0), "ERC20: burn from the zero address");
+        
+        uint256 accountBalance = _balances[account];
+        require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
+        
+        _balances[account] = accountBalance - amount;
+        _totalSupply -= amount;
+    }
 }
