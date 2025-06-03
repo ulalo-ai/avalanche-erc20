@@ -1,0 +1,9 @@
+{
+  "faucetAddress": "0x2996642D80E7aceC5D6733c50767d4686EBaE1A2",
+  "tokenAddress": "0xA916910eDCA3639F42E0E8b397fBBEaf2412Fbe1",
+  "deploymentTime": "2025-05-14T21:05:17.199Z",
+  "faucetLimit": "1,000,000 ULALO",
+  "faucetBalance": "10000.0 ULALO",
+  "dripAmount": "1 ULALO per request",
+  "explorerLink": "https://explorer.ulalo.xyz/address/0x2996642D80E7aceC5D6733c50767d4686EBaE1A2"
+}

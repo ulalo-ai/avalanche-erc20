@@ -3,7 +3,17 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
-function getWallet(network = "fuji") {
+// In script/config.js
+const networks = {
+  ulalo: {
+    url: process.env.RPC_URL,
+    chainId: parseInt(process.env.CHAIN_ID),
+    accounts: [process.env.PRIVATE_KEY]
+  },
+  // ... other networks
+};
+
+function getWallet(network = "ulalo") {
   const privateKey = process.env.PRIVATE_KEY;
   if (!privateKey) {
     throw new Error("Private key not found in environment variables");
@@ -11,12 +21,12 @@ function getWallet(network = "fuji") {
 
   let provider;
   switch (network) {
-    case "fuji":
+    case "ulalo":
       provider = new ethers.providers.JsonRpcProvider(
-        process.env.RPC_URL || "https://api.avax-test.network/ext/bc/C/rpc",
+        "https://rpc-ulalo.cogitus.io/34CjKI4QNj4VJKuT12/ext/bc/WxJtVSojQ1LpPguqJCq45NZutD8T8aZpnnAZTZyfPkNKrsjye/rpc",
         {
-          name: "avalanche-fuji",
-          chainId: 43113
+          name: "Fuji Testnet",
+          chainId: 237776
         }
       );
       break;
@@ -27,8 +37,9 @@ function getWallet(network = "fuji") {
   return new ethers.Wallet(privateKey, provider);
 }
 
-async function deployContract(contractName, artifactName, constructorArgs = [], network = "fuji") {
-  console.log(`Deploying ${contractName} to Avalanche Fuji C-Chain...`);
+// Update the deployContract function to show correct network in logs
+async function deployContract(contractName, artifactName, constructorArgs = [], network = "ulalo") {
+  console.log(`Deploying ${contractName} to ${network.charAt(0).toUpperCase() + network.slice(1)} Network...`);
   const wallet = getWallet(network);
   console.log("Deployer address:", wallet.address);
 

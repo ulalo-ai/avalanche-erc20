@@ -49,7 +49,7 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
     }
     
     function burn(uint256 amount) public virtual override nonReentrant {
-        _burn(_msgSender(), amount);
+        _burn(msg.sender, amount);
     }
 
     function burnFrom(address account, uint256 amount) public virtual override nonReentrant {
@@ -87,6 +87,26 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
     function updateBlacklist(address account, bool shouldBlacklist) external override onlyRole(BLACKLISTER_ROLE) {
         blacklisted[account] = shouldBlacklist;
         emit BlacklistUpdated(account, shouldBlacklist);
+    }
+    
+    /**
+     * @dev Grants a specific role to an account
+     * @param role The role being granted (use constants like MINTER_ROLE)
+     * @param account The address receiving the role
+     */
+    function grantRoleTo(bytes32 role, address account) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        _grantRole(role, account);
+        emit RoleGranted(role, account, _msgSender());
+    }
+
+    /**
+     * @dev Revokes a specific role from an account
+     * @param role The role being revoked
+     * @param account The address losing the role
+     */
+    function revokeRoleFrom(bytes32 role, address account) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        _revokeRole(role, account);
+        emit RoleRevoked(role, account, _msgSender());
     }
     
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external override onlyRole(DEFAULT_ADMIN_ROLE) {

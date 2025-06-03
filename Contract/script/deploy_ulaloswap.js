@@ -1,122 +1,139 @@
 // script/deploy_ulaloswap.js
-const { deployContract, saveDeploymentAddress, getWallet, getDeploymentAddress } = require('./config');
 const { ethers } = require('ethers');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+// Configuration for Ulalo Network
+const NETWORK_CONFIG = {
+  name: "Ulalo Network",
+  chainId: 237776,
+  rpc: "https://rpc-ulalo.cogitus.io/34CjKI4QNj4VJKuT12/ext/bc/WxJtVSojQ1LpPguqJCq45NZutD8T8aZpnnAZTZyfPkNKrsjye/rpc",
+};
+
+// Fixed addresses
+const DEPLOYER_ADDRESS = "0xA8F678cF2311e8575cd8b51E709e0B234896d75F";
+const WAVAX_TOKEN_ADDRESS = "0x8f4eC963Def883487fAC91Ff6B137680Ec7F6c04";
+
+// Helper function to get wallet
+function getWallet() {
+  if (!process.env.PRIVATE_KEY) {
+    throw new Error("Missing PRIVATE_KEY in .env file");
+  }
+  
+  const provider = new ethers.providers.JsonRpcProvider(NETWORK_CONFIG.rpc);
+  return new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+}
+
+// Helper function to deploy contract
+async function deployContract(contractName, args) {
+  const wallet = getWallet();
+  
+  // Read the contract artifact
+  const artifactPath = path.resolve(__dirname, `../out/${contractName}.sol/${contractName}.json`);
+  const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  
+  // Create a ContractFactory
+  const factory = new ethers.ContractFactory(
+    artifact.abi,
+    artifact.bytecode,
+    wallet
+  );
+  
+  // Deploy the contract
+  console.log(`Deploying ${contractName}...`);
+  const contract = await factory.deploy(...args);
+  
+  console.log(`Transaction hash: ${contract.deployTransaction.hash}`);
+  await contract.deployed();
+  console.log(`${contractName} deployed at: ${contract.address}`);
+  
+  return contract;
+}
+
 async function main() {
-  console.log("Deploying UlaloSwap (with native AVAX) to Avalanche Fuji...");
-  const wallet = getWallet("fuji");
+  console.log(`Deploying UlaloSwap to ${NETWORK_CONFIG.name}...`);
+  const wallet = getWallet();
   console.log("Deployer address:", wallet.address);
   
-  // Get the previously deployed UlaloToken address
-  let ulaloTokenAddress;
-  
-  // Try to get from saved deployment
-  try {
-    ulaloTokenAddress = await getDeploymentAddress("ULALO_TOKEN_ADDRESS");
-  } catch (err) {
-    // Fallback to env variable
-    ulaloTokenAddress = process.env.ULALO_TOKEN_ADDRESS;
+  // Verify deployer address matches expected address
+  if (wallet.address.toLowerCase() !== DEPLOYER_ADDRESS.toLowerCase()) {
+    console.warn(`⚠️ Warning: Deployer address ${wallet.address} does not match expected address ${DEPLOYER_ADDRESS}`);
+    // You might want to add a prompt here to confirm continuation
   }
   
-  // If still not found, try to read from deployment file
-  if (!ulaloTokenAddress) {
-    try {
-      const deploymentFile = `ulalo-token-deployment-fuji.json`;
-      if (fs.existsSync(deploymentFile)) {
-        const deploymentData = JSON.parse(fs.readFileSync(deploymentFile));
-        ulaloTokenAddress = deploymentData.token.address;
-      }
-    } catch (err) {
-      console.log("Could not read from deployment file:", err.message);
-    }
+  // Verify we're on the right network
+  const provider = wallet.provider;
+  const network = await provider.getNetwork();
+  console.log(`Connected to network with chainId: ${network.chainId}`);
+  
+  if (network.chainId !== NETWORK_CONFIG.chainId) {
+    console.warn(`⚠️ Warning: Connected to chainId ${network.chainId} but expected ${NETWORK_CONFIG.chainId}`);
+    // You might want to add a prompt here to confirm continuation
   }
   
-  if (!ulaloTokenAddress) {
-    throw new Error("Ulalo token address not found. Please deploy tokens first using deploy_UlaloToken.js");
+  // Check balance before proceeding
+  const balance = await wallet.getBalance();
+  console.log(`Deployer ULA balance: ${ethers.utils.formatEther(balance)} ULA`);
+  
+  if (balance.lt(ethers.utils.parseEther("1"))) {
+    throw new Error("Insufficient ULA balance for deployment and adding liquidity. Need at least 1 ULA.");
   }
   
-  console.log("Using ULALO token:", ulaloTokenAddress);
+  // Using wAVAX token address
+  console.log(`Using wAVAX token: ${WAVAX_TOKEN_ADDRESS}`);
   
-  // Deploy UlaloSwap with native AVAX support
+  // Deploy UlaloSwap
   const swap = await deployContract(
     "UlaloSwap",
-    "UlaloSwap",
-    [ulaloTokenAddress, wallet.address], // [ulaloTokenAddress, feeCollector]
-    "fuji"
+    [WAVAX_TOKEN_ADDRESS, wallet.address]
   );
-  await saveDeploymentAddress("ULALO_SWAP_ADDRESS", swap.address);
+  
   console.log("UlaloSwap deployed to:", swap.address);
   
   // Add initial liquidity
   console.log("Setting up initial liquidity...");
   
-  // Load UlaloToken ABI from compiled contract
-  const tokenArtifactPath = path.resolve(__dirname, '../out/UlaloToken.sol/UlaloToken.json');
-  let ulaloTokenAbi;
+  // Load wAVAX token ABI - minimal ABI for ERC20
+  const wavaxTokenAbi = [
+    "function balanceOf(address account) external view returns (uint256)",
+    "function approve(address spender, uint256 amount) external returns (bool)",
+    "function transfer(address to, uint256 amount) external returns (bool)"
+  ];
   
-  try {
-    const tokenArtifact = JSON.parse(fs.readFileSync(tokenArtifactPath));
-    ulaloTokenAbi = tokenArtifact.abi;
-  } catch (err) {
-    console.log("Could not read token artifact, using minimal ABI");
-    ulaloTokenAbi = [
-      "function mint(address to, uint256 amount) public", 
-      "function approve(address spender, uint256 amount) public returns (bool)",
-      "function balanceOf(address account) external view returns (uint256)"
-    ];
-  }
-  
-  // Get Ulalo token contract
-  const ulaloToken = new ethers.Contract(
-    ulaloTokenAddress,
-    ulaloTokenAbi,
+  // Get wAVAX token contract
+  const wavaxToken = new ethers.Contract(
+    WAVAX_TOKEN_ADDRESS,
+    wavaxTokenAbi,
     wallet
   );
   
   // Initial liquidity amounts
-  const initialAvax = process.env.INITIAL_AVAX_LIQUIDITY 
-    ? ethers.utils.parseEther(process.env.INITIAL_AVAX_LIQUIDITY) 
-    : ethers.utils.parseEther("1"); // Default: 1 AVAX
-    
-  const initialUlalo = process.env.INITIAL_ULALO_LIQUIDITY 
-    ? ethers.utils.parseEther(process.env.INITIAL_ULALO_LIQUIDITY)
-    : ethers.utils.parseEther("10000"); // Default: 10,000 ULALO
+  const initialUla = ethers.utils.parseEther("1"); // 0.1 ULA tokens
+  const initialWavax = ethers.utils.parseEther("50"); // 50 wAVAX tokens
   
-  console.log(`Adding initial liquidity: ${ethers.utils.formatEther(initialAvax)} AVAX and ${ethers.utils.formatEther(initialUlalo)} ULALO`);
+  console.log(`Adding initial liquidity: ${ethers.utils.formatEther(initialUla)} ULA and ${ethers.utils.formatEther(initialWavax)} wAVAX`);
   
-  // Check deployer's token balance
-  const balance = await ulaloToken.balanceOf(wallet.address);
-  console.log(`Current ULALO balance: ${ethers.utils.formatEther(balance)}`);
+  // Check deployer's wAVAX balance
+  const wavaxBalance = await wavaxToken.balanceOf(wallet.address);
+  console.log(`Current wAVAX balance: ${ethers.utils.formatEther(wavaxBalance)} wAVAX`);
   
-  // Mint Ulalo tokens if necessary
-  if (balance.lt(initialUlalo)) {
-    console.log("Minting Ulalo tokens for liquidity...");
-    try {
-      const mintTx = await ulaloToken.mint(wallet.address, initialUlalo);
-      await mintTx.wait();
-      console.log("Minted tokens successfully");
-    } catch (err) {
-      console.log("Could not mint tokens (may not have minter role), using available balance:", err.message);
-      // Continue with current balance
-    }
+  if (wavaxBalance.lt(initialWavax)) {
+    throw new Error(`Insufficient wAVAX balance. Need at least ${ethers.utils.formatEther(initialWavax)} wAVAX`);
   }
   
-  // Check AVAX balance
-  const avaxBalance = await wallet.getBalance();
-  console.log(`Current AVAX balance: ${ethers.utils.formatEther(avaxBalance)}`);
-  
-  if (avaxBalance.lt(initialAvax.add(ethers.utils.parseEther("0.01")))) {
-    throw new Error(`Insufficient AVAX balance. Need at least ${ethers.utils.formatEther(initialAvax.add(ethers.utils.parseEther("0.01")))} AVAX`);
+  // Check ULA balance again to ensure we have enough for liquidity
+  const ulaBalance = await wallet.getBalance();
+  if (ulaBalance.lt(initialUla.add(ethers.utils.parseEther("0.1")))) {
+    throw new Error(`Insufficient ULA balance. Need at least ${ethers.utils.formatEther(initialUla.add(ethers.utils.parseEther("0.1")))} ULA`);
   }
   
-  // Approve Ulalo tokens
-  console.log("Approving Ulalo tokens for swap contract...");
-  const approveTx = await ulaloToken.approve(swap.address, initialUlalo);
+  // Approve wAVAX tokens for the swap contract
+  console.log("Approving wAVAX tokens for swap contract...");
+  const approveTx = await wavaxToken.approve(swap.address, initialWavax);
+  console.log(`Approval transaction hash: ${approveTx.hash}`);
   await approveTx.wait();
-  console.log("Tokens approved");
+  console.log("wAVAX tokens approved");
   
   // Load full swap ABI
   const swapArtifactPath = path.resolve(__dirname, '../out/UlaloSwap.sol/UlaloSwap.json');
@@ -127,10 +144,10 @@ async function main() {
     swapAbi = swapArtifact.abi;
   } catch (err) {
     console.log("Could not read swap artifact, using minimal ABI");
-    swapAbi = ["function addLiquidityWithAVAX(uint amount_Ulalo) external payable"];
+    swapAbi = ["function addLiquidityWithULA(uint amountWAVAX) external payable"];
   }
   
-  // Create contract instance with the addLiquidityWithAVAX function
+  // Create contract instance with the full ABI
   const swapContract = new ethers.Contract(
     swap.address,
     swapAbi,
@@ -140,41 +157,68 @@ async function main() {
   // Add liquidity
   console.log("Adding initial liquidity...");
   try {
-    const addLiqTx = await swapContract.addLiquidityWithAVAX(initialUlalo, {
-      value: initialAvax,
-      gasLimit: 3000000 // Setting higher gas limit for safety
+    // Using the correct function name: addLiquidityWithWAVAX which takes ULA as the native token
+    const addLiqTx = await swapContract.addLiquidityWithULA(initialWavax, {
+      value: initialUla,
+      gasLimit: 5000000 // Setting higher gas limit for safety
     });
     
-    console.log(`Transaction hash: ${addLiqTx.hash}`);
+    console.log(`Add liquidity transaction hash: ${addLiqTx.hash}`);
     console.log("Waiting for transaction confirmation...");
     await addLiqTx.wait();
     console.log("Initial liquidity added successfully!");
+    
+    // Verify liquidity was added correctly
+    const reserveUla = await swapContract.reserveULA();
+    const reserveWavax = await swapContract.reserveWAVAX();
+    
+    console.log(`Reserve ULA: ${ethers.utils.formatEther(reserveUla)} ULA`);
+    console.log(`Reserve wAVAX: ${ethers.utils.formatEther(reserveWavax)} wAVAX`);
+    
   } catch (error) {
     console.error("Failed to add liquidity:", error);
+    if (error.data) {
+      // Try to decode the error data
+      try {
+        const iface = new ethers.utils.Interface([
+          "function Error(string)",
+          "function Panic(uint256)"
+        ]);
+        const decodedError = iface.parseError(error.data);
+        console.error("Decoded error:", decodedError);
+      } catch (e) {
+        console.error("Raw error data:", error.data);
+      }
+    }
     console.log("Continue without adding initial liquidity. You can add it manually later.");
   }
   
   // Save deployment info
   const deploymentInfo = {
-    network: "fuji",
-    ulaloToken: ulaloTokenAddress,
+    network: NETWORK_CONFIG.name,
+    chainId: NETWORK_CONFIG.chainId,
+    rpc: NETWORK_CONFIG.rpc,
+    wavaxToken: WAVAX_TOKEN_ADDRESS,
     ulaloSwap: swap.address,
     initialLiquidity: {
-      avax: ethers.utils.formatEther(initialAvax),
-      ulalo: ethers.utils.formatEther(initialUlalo)
+      ula: ethers.utils.formatEther(initialUla),
+      wavax: ethers.utils.formatEther(initialWavax)
     },
-    timestamp: new Date().toISOString()
+    owner: wallet.address,
+    deployedAt: new Date().toISOString()
   };
   
-  const filename = `ulalo-swap-deployment-fuji.json`;
+  const filename = `ulalo-swap-deployment.json`;
   fs.writeFileSync(filename, JSON.stringify(deploymentInfo, null, 2));
   console.log(`\nDeployment info saved to ${filename}`);
   
   console.log("\n=== UlaloSwap Deployment Summary ===");
-  console.log(`ULALO Token: ${ulaloTokenAddress}`);
+  console.log(`Network: ${NETWORK_CONFIG.name} (ChainId: ${NETWORK_CONFIG.chainId})`);
+  console.log(`wAVAX Token: ${WAVAX_TOKEN_ADDRESS}`);
   console.log(`UlaloSwap: ${swap.address}`);
-  console.log(`Initial AVAX: ${ethers.utils.formatEther(initialAvax)} AVAX`);
-  console.log(`Initial ULALO: ${ethers.utils.formatEther(initialUlalo)} ULALO`);
+  console.log(`Initial ULA: ${ethers.utils.formatEther(initialUla)} ULA`);
+  console.log(`Initial wAVAX: ${ethers.utils.formatEther(initialWavax)} wAVAX`);
+  console.log(`Owner: ${wallet.address}`);
   console.log("Deployment complete!");
 }
 

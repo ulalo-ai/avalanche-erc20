@@ -104,6 +104,20 @@ interface IUlaloToken is IERC20 {
     function updateBlacklist(address account, bool shouldBlacklist) external;
     
     /**
+     * @dev Grants a specific role to an account
+     * @param role The role being granted
+     * @param account The address receiving the role
+     */
+    function grantRoleTo(bytes32 role, address account) external;
+    
+    /**
+     * @dev Revokes a specific role from an account
+     * @param role The role being revoked
+     * @param account The address losing the role
+     */
+    function revokeRoleFrom(bytes32 role, address account) external;
+    
+    /**
      * @dev Emergency token recovery function
      */
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external;
