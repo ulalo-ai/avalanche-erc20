@@ -1,1 +1,0 @@
-# ulalo-testnet
