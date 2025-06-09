@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
@@ -14,7 +15,7 @@ import "./interface/IUlaloToken.sol";
  */
 contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloToken {
     using Math for uint256;
-
+    using SafeERC20 for IERC20;
     // Define roles
     bytes32 public constant override MINTER_ROLE = keccak256("MINTER_ROLE");
     bytes32 public constant override BURNER_ROLE = keccak256("BURNER_ROLE");
@@ -29,30 +30,53 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
     // Blacklist mapping
     mapping(address => bool) public override blacklisted;
 
-    constructor(string memory name, string memory symbol, address initialOwner) 
-        ERC20(name, symbol)
-    {
+    constructor(
+        string memory name,
+        string memory symbol,
+        address initialOwner,
+        address Minter,
+        address Burner,
+        address Pauser,
+        address Blacklister
+    ) ERC20(name, symbol) {
+        require(initialOwner != address(0), "UlaloToken: initial owner cannot be zero address");
+        require(Minter != address(0), "UlaloToken: minter cannot be zero address");
+        require(Burner != address(0), "UlaloToken: burner cannot be zero address");
+        require(Pauser != address(0), "UlaloToken: pauser cannot be zero address");
+        require(Blacklister != address(0), "UlaloToken: blacklister cannot be zero address");
+
         // Setup roles
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
-        _grantRole(MINTER_ROLE, initialOwner);
-        _grantRole(BURNER_ROLE, initialOwner);
-        _grantRole(PAUSER_ROLE, initialOwner);
-        _grantRole(BLACKLISTER_ROLE, initialOwner);
+        _grantRole(MINTER_ROLE, Minter);
+        _grantRole(BURNER_ROLE, Burner);
+        _grantRole(PAUSER_ROLE, Pauser);
+        _grantRole(BLACKLISTER_ROLE, Blacklister);
         
-        // Initialize with a fixed supply for the owner
-        _mint(initialOwner, 100000000 * 10 ** decimals());
-    }
+        // Initialize supply
+        uint256 initialSupply = 100000000 * 10**decimals();
+        _mint(initialOwner, initialSupply);
 
-    function mint(address to, uint256 amount) public override nonReentrant {
-        require(hasRole(MINTER_ROLE, _msgSender()), "UlaloToken: must have minter role to mint");
-        _mint(to, amount);
+        emit TokensMinted(address(this), initialOwner, initialSupply);
     }
     
-    function burn(uint256 amount) public virtual override nonReentrant {
+    function mint(address to, uint256 amount) public override nonReentrant {
+        require(to != address(0), "UlaloToken: mint to the zero address");
+        require(amount > 0, "UlaloToken: mint amount must be greater than zero");
+        require(hasRole(MINTER_ROLE, _msgSender()), "UlaloToken: must have minter role to mint");
+        _mint(to, amount);
+        emit TokensMinted(_msgSender(), to, amount);
+    }
+    
+    function burn(uint256 amount) public virtual override nonReentrant whenNotPaused {
+        require(
+            hasRole(BURNER_ROLE, _msgSender()),
+            "UlaloToken: must have burner role to burn"
+        );
         _burn(msg.sender, amount);
+        emit TokensBurned(_msgSender(), msg.sender, amount);
     }
 
-    function burnFrom(address account, uint256 amount) public virtual override nonReentrant {
+    function burnFrom(address account, uint256 amount) public virtual override nonReentrant whenNotPaused {
         if (_msgSender() != account) {
             require(
                 hasRole(BURNER_ROLE, _msgSender()),
@@ -111,9 +135,11 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
     
     function recoverERC20(address tokenAddress, uint256 tokenAmount) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         // Ensure we're not trying to recover this token
+        require(tokenAmount != 0, "UlaloToken: Cannot recover zero amount");
+        require(tokenAddress != address(0), "UlaloToken: Cannot recover to zero address");
         require(tokenAddress != address(this), "UlaloToken: Cannot recover the token itself");
         
-        IERC20(tokenAddress).transfer(msg.sender, tokenAmount);
+        IERC20(tokenAddress).safeTransfer(msg.sender, tokenAmount); // Use safeTransfer instead of transfer
         emit TokenRecovered(tokenAddress, tokenAmount);
     }
 
@@ -136,6 +162,7 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
         }
         
         if (transferCooldown == 0) return true; // No cooldown if set to 0
+        if (lastTransferTime[from] == 0) return true; // Allow first-ever transfer for an address
         
         return (block.timestamp >= lastTransferTime[from] + transferCooldown);
     }
@@ -144,23 +171,32 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
         address from,
         address to,
         uint256 amount
-    ) internal virtual override whenNotPaused nonReentrant {
+    ) internal virtual override whenNotPaused {
+        // Allow minting operations (from == address(0))
+        if (from == address(0)) {
+            super._update(from, to, amount);
+            return;
+        }
+
+        // Allow burning operations if sender has BURNER_ROLE
+        if (to == address(0)) {
+            require(hasRole(BURNER_ROLE, _msgSender()), "UlaloToken: must have burner role to burn");
+            super._update(from, to, amount);
+            return;
+        }
+
+        // Standard transfer checks
+        require(amount > 0, "UlaloToken: transfer amount must be greater than zero");
         require(!blacklisted[from], "UlaloToken: sender is blacklisted");
         require(!blacklisted[to], "UlaloToken: recipient is blacklisted");
         
-        // Skip checks for minting and burning
-        if (from != address(0) && to != address(0)) {
-            // Check rate limiting
+        // Skip rate limit and cooldown checks for privileged roles
+        if (!hasRole(MINTER_ROLE, from) && !hasRole(DEFAULT_ADMIN_ROLE, from)) {
             require(_checkRateLimit(from, amount), "UlaloToken: transfer exceeds rate limit");
-            
-            // Check cooldown period
             require(_checkCooldown(from), "UlaloToken: cooldown period not yet elapsed");
-            
-            // Update last transfer time
             lastTransferTime[from] = block.timestamp;
         }
         
-        // Call parent implementation
         super._update(from, to, amount);
     }
 }

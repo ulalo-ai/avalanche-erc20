@@ -37,7 +37,12 @@ interface IUlaloToken is IERC20 {
      * @dev Emitted when tokens are recovered from the contract
      */
     event TokenRecovered(address token, uint256 amount);
-    
+
+    /**
+     * @dev Emitted when tokens are minted
+     */
+    event TokensMinted(address indexed minter, address indexed to, uint256 amount);
+
     /**
      * @dev Emitted when tokens are burned
      */
