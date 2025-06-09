@@ -10,88 +10,94 @@ const NETWORK_CONFIG = {
 
 // Contract Addresses
 const WAVAX_ADDRESS = "0x8f4eC963Def883487fAC91Ff6B137680Ec7F6c04";
-const ULA_ADDRESS = "YOUR_ULA_ADDRESS";
 const ROUTER_ADDRESS = "0xfb8224b17c0BD9095134027f4e663416b43775ae";
 
-// Liquidity Amounts
+// Amounts (maintain the ratio if pool exists)
 const WAVAX_AMOUNT = ethers.utils.parseEther("10");
-const ULA_AMOUNT = ethers.utils.parseEther("1000");
+const ULA_AMOUNT = ethers.utils.parseEther("1000"); 
 
-// ABIs
+// Updated ABIs
 const WAVAX_ABI = [
+  "function mint(address to, uint256 amount) external",
   "function balanceOf(address account) external view returns (uint256)",
-  "function approve(address spender, uint256 amount) external returns (bool)"
-];
-
-const ULA_ABI = [
-  "function balanceOf(address account) external view returns (uint256)",
-  "function approve(address spender, uint256 amount) external returns (bool)"
+  "function approve(address spender, uint256 amount) external returns (bool)",
+  "function allowance(address owner, address spender) external view returns (uint256)"
 ];
 
 const ROUTER_ABI = [
-  "function addLiquidity(address tokenA, address tokenB, uint amountADesired, uint amountBDesired, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB, uint liquidity)"
+  "function addLiquidityWithWAVAX(uint256 amountWAVAX) external payable",
+  "function reserveULA() external view returns (uint256)",
+  "function reserveWAVAX() external view returns (uint256)",
+  "function setStrictBalanceCheck(bool _enabled) external",
+  "function strictBalanceCheckEnabled() external view returns (bool)"
 ];
-
-function getWallet() {
-  if (!process.env.PRIVATE_KEY) {
-    throw new Error("Missing PRIVATE_KEY in .env file");
-  }
-  const provider = new ethers.providers.JsonRpcProvider(NETWORK_CONFIG.rpc);
-  return new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-}
 
 async function main() {
   try {
-    console.log("🚀 Starting liquidity provision process");
-    
-    // Connect wallet
     const wallet = getWallet();
     console.log(`Connected with address: ${wallet.address}`);
 
     // Connect to contracts
     const wavax = new ethers.Contract(WAVAX_ADDRESS, WAVAX_ABI, wallet);
-    const ula = new ethers.Contract(ULA_ADDRESS, ULA_ABI, wallet);
     const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
 
-    // Check balances
-    const wavaxBalance = await wavax.balanceOf(wallet.address);
-    const ulaBalance = await ula.balanceOf(wallet.address);
+    // Check initial balances
+    const initialWavaxBalance = await wavax.balanceOf(wallet.address);
+    const initialUlaBalance = await wallet.provider.getBalance(wallet.address);
     
-    console.log("\n--- Current Balances ---");
-    console.log(`WAVAX: ${ethers.utils.formatEther(wavaxBalance)} WAVAX`);
-    console.log(`ULA: ${ethers.utils.formatEther(ulaBalance)} ULA`);
+    console.log("\n--- Initial Balances ---");
+    console.log(`WAVAX: ${ethers.utils.formatEther(initialWavaxBalance)} WAVAX`);
+    console.log(`ULA: ${ethers.utils.formatEther(initialUlaBalance)} ULA`);
 
-    // Verify sufficient balances
-    if (wavaxBalance.lt(WAVAX_AMOUNT)) {
-      throw new Error("Insufficient WAVAX balance");
+    // Check existing pool ratio if exists
+    const reserveULA = await router.reserveULA();
+    const reserveWAVAX = await router.reserveWAVAX();
+    
+    if (reserveULA.gt(0) && reserveWAVAX.gt(0)) {
+      console.log("\nExisting pool ratio:", ethers.utils.formatEther(reserveULA.mul(ethers.constants.WeiPerEther).div(reserveWAVAX)));
+      console.log("Adding ratio:", ethers.utils.formatEther(ULA_AMOUNT.mul(ethers.constants.WeiPerEther).div(WAVAX_AMOUNT)));
     }
-    if (ulaBalance.lt(ULA_AMOUNT)) {
-      throw new Error("Insufficient ULA balance");
+
+    // Step 1: Mint WAVAX
+    console.log("\n🔨 Minting WAVAX...");
+    const mintTx = await wavax.mint(wallet.address, WAVAX_AMOUNT);
+    console.log(`Mint TX: ${mintTx.hash}`);
+    await mintTx.wait();
+
+    // Step 2: Approve WAVAX
+    console.log("\n🔑 Approving WAVAX...");
+    const approveTx = await wavax.approve(ROUTER_ADDRESS, WAVAX_AMOUNT);
+    console.log(`Approve TX: ${approveTx.hash}`);
+    await approveTx.wait();
+
+    // Verify approvals
+    const allowance = await wavax.allowance(wallet.address, ROUTER_ADDRESS);
+    console.log(`WAVAX Allowance: ${ethers.utils.formatEther(allowance)}`);
+
+    // Connect to router contract again to check strict balance
+    const routerWithStrictCheck = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
+
+    // Check if strict balance check is enabled
+    const isStrict = await routerWithStrictCheck.strictBalanceCheckEnabled();
+    console.log("\n🔍 Strict balance check enabled:", isStrict);
+
+    if (isStrict) {
+      console.log("🔄 Disabling strict balance check...");
+      const disableTx = await routerWithStrictCheck.setStrictBalanceCheck(false);
+      console.log(`Disable TX: ${disableTx.hash}`);
+      await disableTx.wait();
+      console.log("✅ Strict balance check disabled");
     }
 
-    // Approve tokens
-    console.log("\n🔑 Approving tokens...");
-    
-    const wavaxApproval = await wavax.approve(ROUTER_ADDRESS, WAVAX_AMOUNT);
-    console.log(`WAVAX Approval TX: ${wavaxApproval.hash}`);
-    await wavaxApproval.wait();
-    
-    const ulaApproval = await ula.approve(ROUTER_ADDRESS, ULA_AMOUNT);
-    console.log(`ULA Approval TX: ${ulaApproval.hash}`);
-    await ulaApproval.wait();
-
-    // Add liquidity
+    // Step 3: Add liquidity
     console.log("\n💧 Adding liquidity...");
-    const addLiquidityTx = await router.addLiquidity(
-      WAVAX_ADDRESS,
-      ULA_ADDRESS,
+    const addLiquidityTx = await router.addLiquidityWithWAVAX(
       WAVAX_AMOUNT,
-      ULA_AMOUNT,
-      WAVAX_AMOUNT.mul(99).div(100), // 5% slippage
-      ULA_AMOUNT.mul(95).div(100),
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 60 * 20, // 20 minutes deadline
-      { gasLimit: 5000000 }
+      {
+        value: ULA_AMOUNT,
+        gasLimit: 5000000,
+        gasPrice: await wallet.provider.getGasPrice()
+      }
     );
     
     console.log(`Add Liquidity TX: ${addLiquidityTx.hash}`);
@@ -99,7 +105,7 @@ async function main() {
 
     // Verify final balances
     const finalWavaxBalance = await wavax.balanceOf(wallet.address);
-    const finalUlaBalance = await ula.balanceOf(wallet.address);
+    const finalUlaBalance = await wallet.provider.getBalance(wallet.address);
     
     console.log("\n--- Final Balances ---");
     console.log(`WAVAX: ${ethers.utils.formatEther(finalWavaxBalance)} WAVAX`);
@@ -108,16 +114,25 @@ async function main() {
     console.log("\n🎉 Liquidity successfully added!");
     
   } catch (error) {
-    console.error("❌ Error:", error);
+    console.error("\n❌ Error:", error);
     if (error.reason) console.error("Reason:", error.reason);
-    if (error.data) console.error("Error data:", error.data);
     process.exit(1);
   }
 }
 
+function getWallet() {
+  if (!process.env.PRIVATE_KEY) {
+    throw new Error("Missing PRIVATE_KEY in .env file");
+  }
+  return new ethers.Wallet(
+    process.env.PRIVATE_KEY, 
+    new ethers.providers.JsonRpcProvider(NETWORK_CONFIG.rpc)
+  );
+}
+
 main()
   .then(() => process.exit(0))
-  .catch((error) => {
+  .catch(error => {
     console.error("Script failed:", error);
     process.exit(1);
   });
