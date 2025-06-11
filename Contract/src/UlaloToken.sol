@@ -59,7 +59,7 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
         emit TokensMinted(address(this), initialOwner, initialSupply);
     }
     
-    function mint(address to, uint256 amount) public override nonReentrant {
+    function mint(address to, uint256 amount) public override nonReentrant whenNotPaused {
         require(to != address(0), "UlaloToken: mint to the zero address");
         require(amount > 0, "UlaloToken: mint amount must be greater than zero");
         require(hasRole(MINTER_ROLE, _msgSender()), "UlaloToken: must have minter role to mint");
@@ -89,12 +89,16 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
     
     function pause() public override {
         require(hasRole(PAUSER_ROLE, _msgSender()), "UlaloToken: must have pauser role to pause");
+        require(!paused(), "UlaloToken: contract is already paused");
         _pause();
+        emit ContractPaused(_msgSender());
     }
 
     function unpause() public override {
         require(hasRole(PAUSER_ROLE, _msgSender()), "UlaloToken: must have pauser role to unpause");
+        require(paused(), "UlaloToken: contract is not paused");
         _unpause();
+        emit ContractUnpaused(_msgSender());
     }
     
     function setTransferLimitPercentage(uint256 percentage) external override onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -171,7 +175,7 @@ contract UlaloToken is ERC20, ReentrancyGuard, AccessControl, Pausable, IUlaloTo
         address from,
         address to,
         uint256 amount
-    ) internal virtual override whenNotPaused {
+    ) internal virtual override whenNotPaused{
         // Allow minting operations (from == address(0))
         if (from == address(0)) {
             super._update(from, to, amount);

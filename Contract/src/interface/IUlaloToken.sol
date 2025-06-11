@@ -47,6 +47,14 @@ interface IUlaloToken is IERC20 {
      * @dev Emitted when tokens are burned
      */
     event TokensBurned(address indexed burner, address indexed account, uint256 amount);
+    /**
+     * @dev Emitted when the contract is paused
+     */
+    event ContractPaused(address indexed pauser);
+    /**
+     * @dev Emitted when the contract is unpaused
+     */
+    event ContractUnpaused(address indexed pauser);
     
     /**
      * @dev Role identifiers

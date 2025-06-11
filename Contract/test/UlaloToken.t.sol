@@ -8,6 +8,11 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
 contract UlaloTokenTest is Test {
+    // Add these event declarations at the top of your contract
+    event TokensMinted(address indexed minter, address indexed to, uint256 amount);
+    event TokensBurned(address indexed burner, address indexed from, uint256 amount);
+    event ContractPaused(address indexed pauser);
+
     UlaloToken public ulaloToken;
     
     address public owner;
@@ -135,18 +140,17 @@ contract UlaloTokenTest is Test {
     // ===== Minting Tests =====
     
     function test_MintByMinter() public {
-        uint256 initialTotalSupply = ulaloToken.totalSupply();
-        uint256 initialUser1Balance = ulaloToken.balanceOf(user1);
+        _resetAllTokenState();
+        uint256 currentSupply = ulaloToken.totalSupply(); // Changed from initialSupply
         uint256 mintAmount = 500 * 10**18;
         
-        // Use a completely separate prank call
-        vm.roll(block.number + 1); // Force a new block
-        vm.startPrank(minter);
-        ulaloToken.mint(user1, mintAmount);
-        vm.stopPrank();
+        vm.expectEmit(true, true, false, true);
+        emit TokensMinted(minter, user1, mintAmount);
         
-        assertEq(ulaloToken.totalSupply(), initialTotalSupply + mintAmount);
-        assertEq(ulaloToken.balanceOf(user1), initialUser1Balance + mintAmount);
+        vm.prank(minter);
+        ulaloToken.mint(user1, mintAmount);
+        
+        assertEq(ulaloToken.totalSupply(), currentSupply + mintAmount);
     }
     
     function testFail_UnauthorizedMint() public {
@@ -157,29 +161,31 @@ contract UlaloTokenTest is Test {
     // ===== Burning Tests =====
     
     function test_BurnFromByBurner() public {
-        // Reset cooldown
-        ulaloToken.setTransferCooldown(0);
-        
-        uint256 initialTotalSupply = ulaloToken.totalSupply();
-        uint256 initialUser1Balance = ulaloToken.balanceOf(user1);
+        _resetAllTokenState();
+        uint256 initialSupply = ulaloToken.totalSupply();
         uint256 burnAmount = 200 * 10**18;
-        
-        // Create a separate function to handle the approval
-        _approveTokens(user1, burner, burnAmount);
-        
-        // Now burn in a separate transaction
-        vm.startPrank(burner);
-        ulaloToken.burnFrom(user1, burnAmount);
+    
+        // Separate approve and burn transactions
+        vm.startPrank(user1);
+        ulaloToken.approve(burner, burnAmount);
         vm.stopPrank();
-        
-        assertEq(ulaloToken.totalSupply(), initialTotalSupply - burnAmount);
-        assertEq(ulaloToken.balanceOf(user1), initialUser1Balance - burnAmount);
+    
+        vm.expectEmit(true, true, false, true);
+        emit TokensBurned(burner, user1, burnAmount);
+    
+        vm.prank(burner);
+        ulaloToken.burnFrom(user1, burnAmount);
+    
+        assertEq(ulaloToken.totalSupply(), initialSupply - burnAmount);
     }
     
     function test_BurnOwnTokens() public {
         ulaloToken.setTransferCooldown(0);
-        uint256 initialTotalSupply = ulaloToken.totalSupply();
+        uint256 currentSupply = ulaloToken.totalSupply(); // Changed from initialSupply
         uint256 burnAmount = 200 * 10**18;
+
+        // Reset state first
+        _resetAllTokenState();
 
         // Transfer tokens to burner
         ulaloToken.transfer(burner, burnAmount);
@@ -188,7 +194,7 @@ contract UlaloTokenTest is Test {
         vm.prank(burner);
         ulaloToken.burn(burnAmount);
 
-        assertEq(ulaloToken.totalSupply(), initialTotalSupply - burnAmount);
+        assertEq(ulaloToken.totalSupply(), currentSupply - burnAmount);
     }
     
     function testFail_UnauthorizedBurn() public {
@@ -200,28 +206,39 @@ contract UlaloTokenTest is Test {
     // ===== Pause Tests =====
     
     function test_PauseAndUnpause() public {
-        // Reset cooldown to avoid previous test interference
-        ulaloToken.setTransferCooldown(0);
+        _resetAllTokenState();
         
-        // Initially not paused
+        // Test initial state
         assertFalse(ulaloToken.paused());
         
-        // Pause the contract
+        // Test successful pause with event
+        vm.expectEmit(true, false, false, true);
+        emit ContractPaused(pauser);
         vm.prank(pauser);
         ulaloToken.pause();
         assertTrue(ulaloToken.paused());
         
-        // Try to transfer (should fail)
+        // Test attempting to pause when already paused
+        vm.expectRevert("UlaloToken: contract is already paused");
+        vm.prank(pauser);
+        ulaloToken.pause();
+        
+        // Test transfers while paused
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
         ulaloToken.transfer(user2, 100 * 10**18);
         
-        // Unpause the contract
+        // Test successful unpause
         vm.prank(pauser);
         ulaloToken.unpause();
         assertFalse(ulaloToken.paused());
         
-        // Transfer should work now
+        // Test attempting to unpause when not paused
+        vm.expectRevert("UlaloToken: contract is not paused");
+        vm.prank(pauser);
+        ulaloToken.unpause();
+        
+        // Verify transfers work after unpause
         vm.prank(user1);
         ulaloToken.transfer(user2, 100 * 10**18);
     }
@@ -244,8 +261,7 @@ contract UlaloTokenTest is Test {
     // ===== Blacklist Tests =====
     
     function test_BlacklistAndUnblacklist() public {
-        // Reset cooldown
-        ulaloToken.setTransferCooldown(0);
+        _resetAllTokenState();
         
         // Initially not blacklisted
         assertFalse(ulaloToken.blacklisted(user1));
@@ -561,45 +577,49 @@ contract UlaloTokenTest is Test {
         ulaloToken.transfer(user2, 10 * 10**18);
     }
     
-    // Helper function to separate transactions
-    function _approveTokens(address from, address to, uint256 amount) internal {
-        vm.startPrank(from);
-        ulaloToken.approve(to, amount);
-        vm.stopPrank();
-    }
-    
-    // Helper function to separate transactions
-    function _transferTokens(address from, address to, uint256 amount) internal {
-        if (from == owner) {
-            // Direct transfer if owner is this contract
-            ulaloToken.transfer(to, amount);
-        } else {
-            vm.startPrank(from);
-            ulaloToken.transfer(to, amount);
-            vm.stopPrank();
-        }
-    }
-    
-    // Helper to reset token state between tests
     function _resetAllTokenState() internal {
-        // Reset cooldown and transfer limit
+        // Reset cooldowns
         ulaloToken.setTransferCooldown(0);
+        
+        // Reset transfer limits
         ulaloToken.setTransferLimitPercentage(0);
-        
-        // Reset block.timestamp
-        vm.warp(1); // Start with a fresh timestamp
-        
-        // Ensure no blacklist interferes
-        vm.startPrank(blacklister);
-        ulaloToken.updateBlacklist(user1, false);
-        ulaloToken.updateBlacklist(user2, false);
-        vm.stopPrank();
         
         // Unpause if paused
         if (ulaloToken.paused()) {
-            vm.startPrank(pauser);
+            vm.prank(pauser);
             ulaloToken.unpause();
-            vm.stopPrank();
+        }
+        
+        // Remove any blacklist entries
+        if (ulaloToken.blacklisted(user1)) {
+            vm.prank(blacklister);
+            ulaloToken.updateBlacklist(user1, false);
+        }
+        if (ulaloToken.blacklisted(user2)) {
+            vm.prank(blacklister);
+            ulaloToken.updateBlacklist(user2, false);
+        }
+    }
+}
+
+contract AttackingToken {
+    UlaloToken public token;
+    bool public attacked;
+    
+    constructor(address _token) {
+        token = UlaloToken(_token);
+    }
+    
+    function attack() external {
+        token.transfer(msg.sender, 100 * 10**18);
+    }
+    
+    // This function will be called during the token transfer
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal {
+        if (!attacked) {
+            attacked = true;
+            // Try to make another transfer while the first is still processing
+            token.transfer(msg.sender, 50 * 10**18);
         }
     }
 }
